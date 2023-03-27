@@ -504,6 +504,7 @@ open class HTTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOper
                      completionHandler: SimpleCompletionHandler) -> Void {
         
         var allData = Data()
+        taskHandlersLock.lock()
         dataCompletionHandlersForTasks[session.sessionDescription!]?[task.taskIdentifier] = { data in
             allData.append(data)
         }
@@ -519,6 +520,7 @@ open class HTTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOper
             completionHandler?(responseError ?? error)
             self?.delegateNotify(operation, error: responseError ?? error)
         }
+        taskHandlersLock.unlock()
         task.taskDescription = operation.json
         sessionDelegate?.observerProgress(of: task, using: progress, kind: .upload)
         progress.cancellationHandler = { [weak task] in
@@ -593,12 +595,15 @@ open class HTTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOper
         
         let task = session.dataTask(with: request)
         if let responseHandler = responseHandler {
+            taskHandlersLock.lock()
             responseCompletionHandlersForTasks[session.sessionDescription!]?[task.taskIdentifier] = { response in
                 responseHandler(response)
             }
+            taskHandlersLock.unlock()
         }
         
         stream.open()
+        taskHandlersLock.lock()
         dataCompletionHandlersForTasks[session.sessionDescription!]?[task.taskIdentifier] = { [weak task, weak self] data in
             guard !data.isEmpty else { return }
             task.flatMap { self?.delegateNotify(operation, progress: Double($0.countOfBytesReceived) / Double($0.countOfBytesExpectedToReceive)) }
@@ -619,6 +624,7 @@ open class HTTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOper
             completionHandler(error)
             self.delegateNotify(operation, error: error)
         }
+        taskHandlersLock.unlock()
         
         task.taskDescription = operation.json
         sessionDelegate?.observerProgress(of: task, using: progress, kind: .download)
@@ -641,11 +647,14 @@ open class HTTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOper
         
         let task = session.dataTask(with: request)
         if let responseHandler = responseHandler {
+            taskHandlersLock.lock()
             responseCompletionHandlersForTasks[session.sessionDescription!]?[task.taskIdentifier] = { response in
                 responseHandler(response)
             }
+            taskHandlersLock.unlock()
         }
         
+        taskHandlersLock.lock()
         dataCompletionHandlersForTasks[session.sessionDescription!]?[task.taskIdentifier] = { [weak task, weak self] data in
             task.flatMap { self?.delegateNotify(operation, progress: Double($0.countOfBytesReceived) / Double($0.countOfBytesExpectedToReceive)) }
             progressHandler(data)
@@ -658,6 +667,7 @@ open class HTTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOper
             completionHandler(error)
             self.delegateNotify(operation, error: error)
         }
+        taskHandlersLock.unlock()
         
         task.taskDescription = operation.json
         sessionDelegate?.observerProgress(of: task, using: progress, kind: .download)
@@ -677,6 +687,7 @@ open class HTTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOper
         progress.setUserInfoObject(Progress.FileOperationKind.downloading, forKey: .fileOperationKindKey)
         
         let task = session.downloadTask(with: request)
+        taskHandlersLock.lock()
         completionHandlersForTasks[session.sessionDescription!]?[task.taskIdentifier] = { error in
             if let error = error {
                 progress.cancel()
@@ -699,6 +710,7 @@ open class HTTPFileProvider: NSObject, FileProviderBasicRemote, FileProviderOper
             
             completionHandler(tempURL, nil)
         }
+        taskHandlersLock.unlock()
         task.taskDescription = operation.json
         sessionDelegate?.observerProgress(of: task, using: progress, kind: .download)
         progress.cancellationHandler = { [weak task] in

@@ -31,23 +31,32 @@ extension FileProviderHTTPError {
     }
 }
 
+/// NSLock used to coordinate concurrent access to the four "CompletionHandlersForTasks" dictionaries
+///
+/// Possibly a better way of fixing the concurrency issues that exist without this, but this was the fastest and least invasive way of fixing the issue
+internal var taskHandlersLock = NSLock()
+
 internal var completionHandlersForTasks = [String: [Int: SimpleCompletionHandler]]()
 internal var downloadCompletionHandlersForTasks = [String: [Int: (URL) -> Void]]()
 internal var dataCompletionHandlersForTasks = [String: [Int: (Data) -> Void]]()
 internal var responseCompletionHandlersForTasks = [String: [Int: (URLResponse) -> Void]]()
 
 internal func initEmptySessionHandler(_ uuid: String) {
+    taskHandlersLock.lock()
     completionHandlersForTasks[uuid] = [:]
     downloadCompletionHandlersForTasks[uuid] = [:]
     dataCompletionHandlersForTasks[uuid] = [:]
     responseCompletionHandlersForTasks[uuid] = [:]
+    taskHandlersLock.unlock()
 }
 
 internal func removeSessionHandler(for uuid: String) {
+    taskHandlersLock.lock()
     _ = completionHandlersForTasks.removeValue(forKey: uuid)
     _ = downloadCompletionHandlersForTasks.removeValue(forKey: uuid)
     _ = dataCompletionHandlersForTasks.removeValue(forKey: uuid)
     _ = responseCompletionHandlersForTasks.removeValue(forKey: uuid)
+    taskHandlersLock.unlock()
 }
 
 /// All objects set to `FileProviderRemote.session` must be an instance of this class
@@ -149,30 +158,54 @@ final public class SessionDelegate: NSObject, URLSessionDataDelegate, URLSession
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         self.removeObservers(for: task)
         
+        taskHandlersLock.lock()
         _ = dataCompletionHandlersForTasks[session.sessionDescription!]?.removeValue(forKey: task.taskIdentifier)
+        taskHandlersLock.unlock()
         if !(error == nil && task is URLSessionDownloadTask) {
+            taskHandlersLock.lock()
             let completionHandler = completionHandlersForTasks[session.sessionDescription!]?[task.taskIdentifier] ?? nil
+            taskHandlersLock.unlock()
+            
             completionHandler?(error)
+            
+            taskHandlersLock.lock()
             _ = completionHandlersForTasks[session.sessionDescription!]?.removeValue(forKey: task.taskIdentifier)
+            taskHandlersLock.unlock()
         }
     }
     
     public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        taskHandlersLock.lock()
         let dcompletionHandler = downloadCompletionHandlersForTasks[session.sessionDescription!]?[downloadTask.taskIdentifier]
+        taskHandlersLock.unlock()
+        
         dcompletionHandler?(location)
+        
+        taskHandlersLock.lock()
         _ = downloadCompletionHandlersForTasks[session.sessionDescription!]?.removeValue(forKey: downloadTask.taskIdentifier)
         _ = completionHandlersForTasks[session.sessionDescription!]?.removeValue(forKey: downloadTask.taskIdentifier)
+        taskHandlersLock.unlock()
     }
     
     public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        taskHandlersLock.lock()
         let handler = responseCompletionHandlersForTasks[session.sessionDescription!]?[dataTask.taskIdentifier] ?? nil
+        taskHandlersLock.unlock()
+        
         handler?(response)
         completionHandler(.allow)
+        
+        taskHandlersLock.lock()
         _ = responseCompletionHandlersForTasks[session.sessionDescription!]?.removeValue(forKey: dataTask.taskIdentifier)
+        taskHandlersLock.unlock()
     }
     
     public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        if let completionHandler = dataCompletionHandlersForTasks[session.sessionDescription!]?[dataTask.taskIdentifier] {
+        taskHandlersLock.lock()
+        let completionHandler = dataCompletionHandlersForTasks[session.sessionDescription!]?[dataTask.taskIdentifier]
+        taskHandlersLock.unlock()
+
+        if let completionHandler {
             /*if let json = dataTask.taskDescription?.deserializeJSON(),
                let op = FileOperationType(json: json), let fileProvider = fileProvider {
                 fileProvider.delegateNotify(op, progress: Double(dataTask.countOfBytesReceived) / Double(dataTask.countOfBytesExpectedToReceive))

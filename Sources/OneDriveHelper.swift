@@ -263,6 +263,7 @@ extension OneDriveFileProvider {
         progress.setUserInfoObject(Date(), forKey: .startingTimeKey)
         
         var allData = Data()
+        taskHandlersLock.lock()
         dataCompletionHandlersForTasks[session.sessionDescription!]?[task.taskIdentifier] = { data in
             allData.append(data)
         }
@@ -306,6 +307,7 @@ extension OneDriveFileProvider {
                 self.delegateNotify(operation)
             }
         }
+        taskHandlersLock.unlock()
         
         task.resume()
     }
